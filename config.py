@@ -15,7 +15,7 @@ preproc = ml_collections.ConfigDict()
 ## basic
 preproc.batch_size = 1024  
 preproc.image_size = 224   
-
+preproc.tfrecs_filepath = ["", ""]
 
 ## Augmentations
 preproc.no_aug = False
@@ -87,5 +87,8 @@ cfg.basics = basics
 cfg.preproc = preproc
 cfg.training = training
 
-def get_config():
-    return cfg
+def get_config(return_frozen=True):
+    if return_frozen:
+        return cfg, ml_collections.FrozenConfigDict(cfg)
+    else:
+        return cfg
