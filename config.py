@@ -14,7 +14,8 @@ preproc = ml_collections.ConfigDict()
 
 ## basic
 preproc.batch_size = 1024  
-preproc.image_size = 224   
+preproc.image_size = 224  
+preproc.num_classes = 1000 
 preproc.tfrecs_filepath = ["", ""]
 
 ## Augmentations
@@ -30,7 +31,9 @@ preproc.mixup.apply = True
 preproc.cutmix.apply = False
 preproc.random_erasing.apply = True
 preproc.randaugment.apply = True
-
+preproc.pca_jitter = False
+preproc.horizontal_flip = True
+preproc.random_rotate = False
 
 # augmentation values
 preproc.mixup.alpha = 0.2  
