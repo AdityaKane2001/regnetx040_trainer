@@ -4,6 +4,8 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 import tensorflow_probability as tfp
 
+from official.vision.image_classification.augment import RandAugment
+
 from typing import Union, Callable, Tuple, List, Type
 from datetime import datetime
 
@@ -37,6 +39,16 @@ class ImageNet:
     def __init__(self, cfg):
         self.cfg = cfg
         self.eigen_vecs, self.eigen_vals = self._get_eigen_vecs_and_vals()
+        self.augmenter = self._get_augmenter()
+    
+    def init_randaugment(self):
+        if self.cfg.randaugment.apply:
+            augmenter = RandAugment(
+                num_layers=self.cfg.randaugment.num_layers,
+                magnitude=self.cfg.randaugment.magnitude)
+        else:
+            augmenter = None
+        return augmenter
 
     def _get_eigen_vecs_and_vals(self):
         eigen_vals = tf.constant(
@@ -171,15 +183,122 @@ class ImageNet:
         rotated = tfa.image.rotate(image, angles, fill_value=128.0)
         return rotated, target
     
+    def sample_beta_distribution(self, size, concentration_0=0.2, concentration_1=0.2):
+        gamma_1_sample = tf.random.gamma(shape=[size], alpha=concentration_1)
+        gamma_2_sample = tf.random.gamma(shape=[size], alpha=concentration_0)
+        return gamma_1_sample / (gamma_1_sample + gamma_2_sample)
+
+
+    @tf.function
+    def get_box(self, lambda_value):
+        # Code credits: https://keras.io/examples/vision/cutmix/
+        IMG_SIZE = self.cfg.image_size
+        cut_rat = tf.math.sqrt(1.0 - lambda_value)
+
+        cut_w = IMG_SIZE * cut_rat  # rw
+        cut_w = tf.cast(cut_w, tf.int32)
+
+        cut_h = IMG_SIZE * cut_rat  # rh
+        cut_h = tf.cast(cut_h, tf.int32)
+
+        cut_x = tf.random.uniform(
+            (1,), minval=0, maxval=IMG_SIZE, dtype=tf.int32)  # rx
+        cut_y = tf.random.uniform(
+            (1,), minval=0, maxval=IMG_SIZE, dtype=tf.int32)  # ry
+
+        boundaryx1 = tf.clip_by_value(cut_x[0] - cut_w // 2, 0, IMG_SIZE)
+        boundaryy1 = tf.clip_by_value(cut_y[0] - cut_h // 2, 0, IMG_SIZE)
+        bbx2 = tf.clip_by_value(cut_x[0] + cut_w // 2, 0, IMG_SIZE)
+        bby2 = tf.clip_by_value(cut_y[0] + cut_h // 2, 0, IMG_SIZE)
+
+        target_h = bby2 - boundaryy1
+        if target_h == 0:
+            target_h += 1
+
+        target_w = bbx2 - boundaryx1
+        if target_w == 0:
+            target_w += 1
+
+        return boundaryx1, boundaryy1, target_h, target_w
+
+
+    @tf.function
     def cutmix(self, image: tf.Tensor, target: tf.Tensor) -> tuple:
         """
-        Credits: https://keras.io/examples/vision/cutmix/
+        Code credits: https://keras.io/examples/vision/cutmix/
         Applies cutmix augmentation to a batch of images.
 
         Args:
             image: batch of images
             target: batch of targets corresponding the targets
-        
+
         Returns:
             Tuple containing (images, targets)
         """
+        IMG_SIZE = self.cfg.image_size
+        
+        (image1, label1), (image2, label2) = train_ds_one, train_ds_two
+
+        alpha = [0.25]
+        beta = [0.25]
+
+        # Get a sample from the Beta distribution
+        lambda_value = self.sample_beta_distribution(1, alpha, beta)
+
+        # Define Lambda
+        lambda_value = lambda_value[0][0]
+
+        # Get the bounding box offsets, heights and widths
+        boundaryx1, boundaryy1, target_h, target_w = self.get_box(lambda_value)
+
+        # Get a patch from the second image (`image2`)
+        crop2 = tf.image.crop_to_bounding_box(
+            image2, boundaryy1, boundaryx1, target_h, target_w
+        )
+        # Pad the `image2` patch (`crop2`) with the same offset
+        image2 = tf.image.pad_to_bounding_box(
+            crop2, boundaryy1, boundaryx1, IMG_SIZE, IMG_SIZE
+        )
+        # Get a patch from the first image (`image1`)
+        crop1 = tf.image.crop_to_bounding_box(
+            image1, boundaryy1, boundaryx1, target_h, target_w
+        )
+        # Pad the `image1` patch (`crop1`) with the same offset
+        img1 = tf.image.pad_to_bounding_box(
+            crop1, boundaryy1, boundaryx1, IMG_SIZE, IMG_SIZE
+        )
+
+        # Modify the first image by subtracting the patch from `image1`
+        # (before applying the `image2` patch)
+        image1 = image1 - img1
+        # Add the modified `image1` and `image2`  together to get the CutMix image
+        image = image1 + image2
+
+        # Adjust Lambda in accordance to the pixel ration
+        lambda_value = 1 - (target_w * target_h) / (IMG_SIZE * IMG_SIZE)
+        lambda_value = tf.cast(lambda_value, tf.float32)
+
+        # Combine the labels of both images
+        label = lambda_value * label1 + (1 - lambda_value) * label2
+        return image, label
+
+    # Cutmix and Mixup
+    # RandAugment
+    # * Random Erasing
+    def randaugment(self, image: tf.Tensor, target: tf.Tensor) -> tuple:
+        """
+        Applies RandAugment using implementation from tensorflow/models.
+        processes a single image at a time.
+        
+        Args:
+            image: single image
+            target: single target
+
+        Returns:
+            Tuple containing (images, targets)
+        """
+        img = self.augmenter.distort(image)
+        return img, target
+
+    def random_erasing(self, image: tf.Tensor, target: tf.Tensor) -> tuple:
+        pass
