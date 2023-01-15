@@ -300,5 +300,48 @@ class ImageNet:
         img = self.augmenter.distort(image)
         return img, target
 
+    def _get_erasing_dims(self, height, width, min_erase, max_erase, r1, max_iter=10):
+        x1, x2, y1, y2 = 0., tf.cast(width, tf.float32) , 0., tf.cast(height, tf.float32)
+        area = height * width
+        for _ in range(max_iter):
+            target_area = tf.random.unifrom((), minval=min_erase, maxval=max_erase) * area
+            aspect_ratio = tf.random.uniform((), minval=r1, maxval=1/r1)
+            
+            h = tf.cast(
+                tf.math.round(
+                    tf.math.sqrt(
+                        target_area * aspect_ratio
+                    )), tf.int32)
+            w = tf.cast(
+                tf.math.round(
+                    tf.math.sqrt(
+                        target_area / aspect_ratio
+                    )), tf.int32)
+
+            if h < height:
+                if w < width:
+                    x1 = tf.random.uniform((),minval=0, maxval=w-1, dtype=tf.int32)
+                    y1 = tf.random.uniform(
+                        (), minval=0, maxval=h-1, dtype=tf.int32)
+            
+
+        return x1, y1, x2, y2
+
     def random_erasing(self, image: tf.Tensor, target: tf.Tensor) -> tuple:
-        pass
+        """
+        Applies Random Erasing using implementation from tensorflow/models.
+        Processes a single image at a time.
+        
+        Args:
+            image: single image
+            target: single target
+
+        Returns:
+            Tuple containing (images, targets)
+        """
+        x1, y1, x2, y2 = self._get_erasing_dims(self.cfg.image_size, self.cfg.image_size,
+                                                self.cfg.random_erasing.min_erase,
+                                                self.cfg.random_erasing.max_erase,
+                                                self.cfg.random_erasing.aspect_ratio)
+        
+        
